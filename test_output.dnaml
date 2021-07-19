@@ -1,0 +1,45 @@
+
+Nucleic acid sequence Maximum Likelihood method, version 3.697
+
+
+Empirical Base Frequencies:
+
+   A       0.28499
+   C       0.16949
+   G       0.24266
+  T(U)     0.30286
+
+
+Transition/transversion ratio =   2.000000
+
+
+  +SlydLA2951
+  |  
+  |    +--S_Pennelli
+  3----2  
+  |    |  +ITAG4_1_CD
+  |    +--1  
+  |       +Spimpinell
+  |  
+  +SlydLA2951
+
+
+remember: (although rooted by outgroup) this is an unrooted tree!
+
+Ln Likelihood = -2192.58287
+
+ Between        And            Length      Approx. Confidence Limits
+ -------        ---            ------      ------- ---------- ------
+
+     3          SlydLA2951        0.00006     (     zero,    infinity)
+     3          SlydLA2951        0.00006     (     zero,    infinity)
+     3             2              0.08315     (  0.06311,     0.10319) **
+     2          S_Pennelli        0.04486     (  0.02933,     0.06039) **
+     2             1              0.00754     (  0.00130,     0.01378) **
+     1          ITAG4_1_CD        0.00006     (     zero,    infinity)
+     1          Spimpinell        0.00006     (     zero,    infinity)
+
+     *  = significantly positive, P < 0.05
+     ** = significantly positive, P < 0.01
+
+

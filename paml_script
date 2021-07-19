@@ -1,0 +1,233 @@
+#!/usr/bin/perl 
+
+use strict;
+use warnings;
+use Data::Dumper;
+
+###TO DO
+#1) make the way branches are labelled for paml more elegant
+#2) parse relevant paml output
+
+=head1 NAME
+
+paml_branch-site.pl
+
+=head1 SYNOPSIS
+
+paml_branch-site.pl -i t/data/worm_fam_2785.cdna [-f fasta/genbank/embl...] [-msa tcoffee/clustal] [-kaks yn00/codeml]
+
+=head1 DESCRIPTION 
+
+ This script will take as input a dataset of cDNA sequences verify
+ that they contain no stop codons, align them in protein space,
+ project the alignment back into cDNA and detect positively selected sites
+ along a lineage estimate using the method of Yang with the PAML package.
+
+ Requires:
+ * bioperl-run package
+ * PAML program codeml or yn00
+ * Multiple sequence alignment programs Clustalw OR T-Coffee
+
+=head1 AUTHOR
+
+ Susan Strickler (srs57@cornell.edu)
+
+ Adapted from Bioperl script
+
+=cut
+
+eval {
+    require Bio::Tree::TreeI;
+
+    # Multiple Sequence Alignment programs
+    require Bio::Tools::Run::Alignment::Clustalw;
+};
+
+if( $@ ) {
+    die("Must have bioperl-run pkg installed to run this script");
+}
+
+# for projecting alignments from protein to R/DNA space
+use Bio::Align::Utilities qw(aa_to_dna_aln);
+
+# for input of the sequence data
+use Bio::SeqIO;
+use Bio::AlignIO;
+
+# for the command line argument parsing
+use Getopt::Long;
+
+my ($kaks_prog,$format, $output,
+    $cdna,$tree,$runmode, $seqtype, $model, $nssites, $fix_omega, $omega, $verbose,$help) = qw(clustalw codeml fasta);
+
+GetOptions(
+           'i|input:s'      => \$cdna,
+           't|tree:s'       => \$tree,
+	   'o|output:s'     => \$output,
+	   'f|format:s'     => \$format,      
+	   'kaks:s'         => \$kaks_prog,
+           'r|runmode=s'      => \$runmode,
+           's|seqtype=s'      => \$seqtype,
+           'm|model=s'        => \$model,
+           'n|NSsites=s'      => \$nssites,
+           'x|fix_omega=s'    => \$fix_omega,
+           'g|omega=s'        => \$omega,
+	   'v|verbose=s'      => \$verbose,
+	   'h|help=s'         => \$help,
+	   );
+
+if( $help ) {
+    exec('perldoc',$0);
+    exit(0);
+}
+
+$verbose = -1 unless $verbose;
+
+my ($aln_factory,$kaks_factory);
+$aln_factory = Bio::Tools::Run::Alignment::Clustalw->new(-verbose => $verbose);
+
+my $clustal = `which clustalw`;
+unless (length $clustal ){
+    warn("Clustal is not installed");
+    exit(0);
+}
+
+my $dnaml_program = `which dnaml`;
+unless (length $dnaml_program ){
+    warn("Dnaml is not installed");
+    exit(0);
+}
+
+my $gene_tree = "";
+
+if ($tree){
+    my $tree_in = new Bio::TreeIO(-file   => $tree,
+				  -format => "newick");
+    
+    my $gene_tree = $tree_in->next_tree;
+}
+
+unless ( $cdna && -f $cdna ) { 
+   warn("Did not specify a valid cDNA sequence file as input"); 
+    exit(0);
+}
+
+my $seqin = new Bio::SeqIO(-file   => $cdna, 
+			   -format => $format);
+
+my %seqs;
+my @prots;
+
+while( my $seq = $seqin->next_seq ) {
+    $seqs{$seq->display_id} = $seq;
+    my $protein = $seq->translate();
+    my $pseq = $protein->seq();
+
+    if( $pseq =~ /\*/ ) {
+	print STDERR "provided a cDNA (".$seq->display_id.") sequence with a stop codon, PAML will choke!\n";
+    }
+
+    $protein->seq($pseq);
+    push @prots, $protein;
+}
+
+if( @prots < 2 ) {
+    warn("Need at least 2 cDNA sequences to proceed");
+    exit(0);
+}
+
+my $base_name;
+
+if ($cdna =~ /(.*)(\.fa)/){
+    $base_name = $1;
+}
+
+else {print "Wrong cdna naming convention\n";}
+
+my $aa_aln = $aln_factory->align(\@prots);
+my $dna_aln = &aa_to_dna_aln($aa_aln, \%seqs);
+
+open (OUT, ">$base_name.aln") || die("Cannot open output $cdna.aln for writing");
+
+$dna_aln->gap_char('-');
+my $end = $dna_aln->length;
+my @each_seq = $dna_aln->each_seq();
+
+foreach my $each_seq (@each_seq){
+    my $start = $each_seq->start;
+    my $name = $each_seq->display_id;
+    my $trunc_name= substr($name, 0, 10 );
+
+    print OUT ">" . $trunc_name. "\n" . $each_seq->subseq($start, $end) . "\n";
+}
+
+
+my $out_phylip = Bio::AlignIO->new(-file   => ">$base_name.phylip",
+				   -format => 'phylip');
+
+if ($dna_aln){
+       $out_phylip->write_aln($dna_aln);                                                                                                                                            
+}
+
+else {print "Can't open alignment.\n";}
+
+if (!$tree){
+    open (OUT, ">$base_name.dnamlin") || die("Cannot open output $base_name.dnamlin for writing");
+    print OUT "$base_name.phylip" . "\no\n5\ny\n";
+    `dnaml < "$base_name.dnamlin"`;
+    `mv outfile "$base_name.dnaml"`;
+    open my $out, ">", "$base_name.tree";
+    open my $in,  "<", "outtree";
+
+    while (<$in>) {
+	s/(Solyp..g..:.\......)/$1 #1/g; 
+	print {$out} $_;
+    }
+    
+    `rm outtree`;
+    $tree = "$base_name.tree";
+}
+ 
+#make paml ctrl file
+open (CTRL, ">$base_name.ctl") || die("Cannot open output $base_name.ctl for writing");
+
+print CTRL "seqfile = " . "$base_name.aln\n"; #sequence data filename
+print CTRL "treefile = " . $tree . "\n";    #tree structure file name
+print CTRL "outfile = " . "$base_name.mlc\n\n"; #main result file name
+
+print CTRL "noisy = 9\n";                          #0,1,2,3,9: how much rubbish on the screen
+print CTRL "verbose = 1\n";                        #0 concise; 1: detailed, 2: too much
+print CTRL "runmode = 0\n\n";                        #0: user tree;  1: semi-automatic;  2: automatic;  3: StepwiseAddition; (4,5):PerturbationNNI; -2: pairwise
+
+print CTRL "seqtype = 1\n";                        #1:codons; 2:AAs; 3:codons-->AAs
+print CTRL "CodonFreq = 2\n\n";                      #0:1/61 each, 1:F1X4, 2:F3X4, 3:codon table
+
+print CTRL "clock = 0\n";                          #0:no clock, 1:clock; 2:local clock; 3:CombinedAnalysis
+print CTRL "aaDist = 0\n";                         #0:equal, +:geometric; -:linear, 1-6:G1974,Miyata,c,p,v,a
+print CTRL "model = 0\n\n";                          #models for codons:* 0:one, 1:b, 2:2 or more dN/dS ratios for branches * models for AAs or codon-translated AAs:
+                                                   #* 0:poisson, 1:proportional, 2:Empirical, 3:Empirical+F * 6:FromCodon, 7:AAClasses, 8:REVaa_0, 9:REVaa(nr=189)
+print CTRL "NSsites = 0\n";         #0:one w;1:neutral;2:selection; 3:discrete;4:freqs;5:gamma;6:2gamma;7:beta;8:beta&w;9:beta&gamma;10:beta&gamma+1;                                                                    11:beta&normal>1; 12:0&2normal>1; 13:3normal>0
+print CTRL "icode = 0\n";                          #0:universal code; 1:mammalian mt; 2-10:see below
+print CTRL "Mgene = 0\n\n";                          #codon: 0:rates, 1:separate; 2:diff pi, 3:diff kapa, 4:all diff AA: 0:rates, 1:separate
+
+print CTRL "fix_kappa = 0\n";                      #1: kappa fixed, 0: kappa to be estimated
+print CTRL "kappa = 2\n";                             #initial or fixed kappa
+print CTRL "fix_omega = 0\n";                         #1: omega or omega_1 fixed, 0: estimate
+print CTRL "omega = .4\n";                          #initial or fixed omega, for codons or codon-based AAs
+print CTRL "fix_alpha = 1\n";                      #0: estimate gamma shape parameter; 1: fix it at alpha
+print CTRL "alpha = 0\n";                          #initial or fixed alpha, 0:infinity (constant rate)
+print CTRL "Malpha = 0\n";                         #different alphas for genes
+print CTRL "ncatG = 8\n\n";                          # Number of categories in dG of NSsites models
+
+print CTRL "getSE = 0\n";                          #0: don't want them, 1: want S.E.s of estimates
+print CTRL "RateAncestor = 1\n\n";                   #(0,1,2): rates (alpha>0) or ancestral states (1 or 2)
+
+print CTRL "Small_Diff = .5e-6\n";
+print CTRL "cleandata = 1\n";                        #remove sites with ambiguity data (1:yes, 0:no)?
+print CTRL "method = 0\n\n";                            #Optimization method 0: simultaneous; 1: one branch a time
+
+my $ctrl = "$base_name.ctl";
+
+print "running paml\n";
+
+`codeml $ctrl`;
